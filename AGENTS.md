@@ -39,7 +39,9 @@ generation, geometry correction or safety overrides to the bridge.
 ## Conventions
 
 - Python 3.8+, standard library plus numpy only. Windows is the target
-  platform.
+  platform. Python 3.11+ is recommended: earlier versions round
+  `time.sleep()` to the ~15.6 ms Windows tick, which `setup_fine_sleep()`
+  works around with `timeBeginPeriod(1)`. Don't remove that fallback.
 - Ether Dream points are 18 bytes (signed 16-bit XY, 16-bit colour); Helios
   points are 8 bytes (12-bit XY, 8-bit colour). Conversion lives in
   `to_helios()`; axis flips and `--max-intensity` are applied there.
