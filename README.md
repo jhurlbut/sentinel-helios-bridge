@@ -24,7 +24,8 @@ Editor / adaptive mapping chains, Laser Trace, ILDA Player) works unchanged.
 ## Requirements
 
 - Windows 10/11 x64 (the bundled DLLs are Windows builds)
-- Python 3.8+ and numpy (`pip install numpy`)
+- Python 3.11+ recommended, 3.8+ works, and numpy (`pip install numpy`). See
+  [Latency](#latency) for why 3.11 matters on Windows.
 - A USB Helios DAC (network/IDN Helios: try `--network`, untested)
 - Sentinel with the Laser Out node (`laserout`) and a license tier that allows
   hardware laser output (trial installs run hardware protocols as Record)
@@ -76,8 +77,8 @@ Point the projector at a wall with nobody in the beam.
    Laser Out's `flip_x` / `flip_y` / `rotate_180`, or the bridge's `--flip-x`,
    `--flip-y`, `--swap-xy`.
 6. Watch `underflows`, `frames_skipped`, `frames_repeated` and
-   `frame_latency_ms` on the Laser Out, and `max_gap` in the bridge log.
-   Tune `--chunk-ms` (10 to 40) and Laser Out's `sent_ahead_samples`.
+   `frame_latency_ms` on the Laser Out, and `max_gap` and `latency<=` in the
+   bridge log. Tune with [Latency](#latency) below.
 
 ## Using it with laser mapping
 
@@ -92,6 +93,35 @@ Out the same way you would for any other DAC. Two things to know:
   different projector than your mapping was tuned on, re-tune for it, and
   re-map if the projector moved.
 
+## Latency
+
+The bridge adds the points waiting in its Ether Dream buffer plus up to two
+Helios frames (one playing, one queued). The stats line shows both:
+`fifo=… (…ms) latency<=…ms`. With the defaults and a client that keeps the
+buffer shallow, the bridge adds about 20–30 ms, on top of Sentinel's own frame
+time (16.7 ms at 60 fps). That is in the range of a 60 fps video projector's
+one-to-two-frame lag.
+
+- **Use Python 3.11+ on Windows.** Earlier versions round `time.sleep()` up to
+  the ~15.6 ms system tick, so the DAC thread's short waits become 15 ms
+  stalls. On 3.8–3.10 the bridge raises the Windows timer to 1 ms for its own
+  lifetime and logs a warning.
+- **`--chunk-ms`** (default 10, the Helios SDK's guideline minimum) sets the
+  Helios frame length. Raise it toward 20–40 only if `max_gap` spikes or
+  underflows appear.
+- **Laser Out's `sent_ahead_samples`** sets how full the client keeps the
+  bridge's buffer, which is usually the biggest latency term. Lower it until
+  underflows appear, then back off. Use Frame Lock so each rendered frame goes
+  out as soon as it is ready.
+- **Leave `--capacity` alone** unless you have a reason. It is a ceiling, not a
+  target, and Laser Out may need room for two whole frames; the bridge warns if
+  it is below two 60 fps frames at `--max-rate`.
+- **Keep `--trace` at 0 or 1.** Level 2 logs every packet.
+
+Smaller buffers trade latency for robustness: when the bridge runs dry it goes
+idle and the Helios blanks, so a buffer tuned too tight shows up as flicker,
+not as a held beam.
+
 ## Options
 
 | Option | Default | Meaning |
@@ -103,7 +133,7 @@ Out the same way you would for any other DAC. Two things to know:
 | `--lan` | off | Listen on all interfaces and broadcast discovery (default is loopback only) |
 | `--max-intensity` | `1.0` | Bridge-side colour ceiling, 0..1 |
 | `--flip-x`, `--flip-y`, `--swap-xy` | off | Axis fixes applied in the bridge |
-| `--chunk-ms` | `20` | Length of each frame sent to the Helios |
+| `--chunk-ms` | `10` | Length of each frame sent to the Helios; raise toward 20–40 if you see gaps |
 | `--capacity` | `1800` | Advertised Ether Dream point buffer |
 | `--max-rate` | `40000` | Highest point rate advertised |
 | `--trace 0\|1\|2` | `1` | Quiet, commands, every data packet |

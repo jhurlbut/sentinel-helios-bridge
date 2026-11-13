@@ -49,10 +49,40 @@ HELIOS_MAX_POINTS = 0xFFF
 HELIOS_MAX_PPS = 0xFFFF
 HELIOS_FLAGS_SINGLE_MODE = 1 << 1   # play once; DAC goes dark if we stop feeding
 MIN_FRAME_POINTS = 20
+HELIOS_MIN_CHUNK_MS = 10.0          # SDK: frames should be 10 ms or longer on average
+REFERENCE_FPS = 60.0                # used to sanity-check --capacity
 
 
 class BackendError(Exception):
     pass
+
+
+# ---------------------------------------------------------------- timing
+
+def setup_fine_sleep():
+    """Make time.sleep() fine enough for the DAC thread's sub-millisecond polling.
+
+    Before Python 3.11, time.sleep() on Windows rounds up to the system timer
+    tick (about 15.6 ms by default), which turns the DAC loop's 0.3 ms waits
+    into 15 ms stalls: late frames, blank gaps and extra latency. Python 3.11+
+    uses a high-resolution waitable timer. On older versions we raise the
+    Windows timer resolution to 1 ms for the life of the process.
+
+    Returns a callable that undoes the change.
+    """
+    if sys.platform != "win32" or sys.version_info >= (3, 11):
+        return lambda: None
+    try:
+        winmm = ctypes.WinDLL("winmm")
+        if winmm.timeBeginPeriod(1) == 0:
+            log.warning("Python %d.%d: raised the Windows timer to 1 ms. Python 3.11+ "
+                        "is recommended for low latency.", *sys.version_info[:2])
+            return lambda: winmm.timeEndPeriod(1)
+    except OSError:
+        pass
+    log.warning("Python %d.%d on Windows: time.sleep() resolution is about 15 ms, expect "
+                "gaps and extra latency. Use Python 3.11+.", *sys.version_info[:2])
+    return lambda: None
 
 
 # ---------------------------------------------------------------- backends
@@ -486,7 +516,7 @@ def beacon_loop(dacs, opts):
         time.sleep(1.0)
 
 
-def stats_loop(dacs):
+def stats_loop(dacs, opts):
     last = {}
     while True:
         time.sleep(1.0)
@@ -499,9 +529,14 @@ def stats_loop(dacs):
             last[d.index] = pc
             if prev is None or pc < prev:   # first sample, or a new prepare reset the count
                 continue
-            log.info("[%d] playing rate=%d played/s=%d fifo=%d chunks=%d "
-                     "max_gap=%.1fms max_write=%.1fms underflows=%d",
-                     d.index, d.rate, pc - prev, len(d.fifo) // 18, d.chunks,
+            fifo = len(d.fifo) // 18
+            fifo_ms = fifo * 1000.0 / d.rate if d.rate else 0.0
+            # Points waiting in the bridge, plus up to one frame playing and one
+            # queued on the Helios.
+            latency_ms = fifo_ms + 2 * opts.chunk_ms
+            log.info("[%d] playing rate=%d played/s=%d fifo=%d (%.1fms) latency<=%.0fms "
+                     "chunks=%d max_gap=%.1fms max_write=%.1fms underflows=%d",
+                     d.index, d.rate, pc - prev, fifo, fifo_ms, latency_ms, d.chunks,
                      d.max_gap_ms, d.max_write_ms, d.underflows)
             d.max_gap_ms = d.max_write_ms = 0.0
 
@@ -518,7 +553,8 @@ def main():
     ap.add_argument("--port", type=int, default=ED_TCP_PORT, help="TCP port of the first DAC")
     ap.add_argument("--capacity", type=int, default=1800, help="advertised point buffer")
     ap.add_argument("--max-rate", type=int, default=40000)
-    ap.add_argument("--chunk-ms", type=float, default=20.0, help="length of each frame sent to the Helios")
+    ap.add_argument("--chunk-ms", type=float, default=HELIOS_MIN_CHUNK_MS,
+                    help="length of each frame sent to the Helios (10 = lowest latency, raise if you see gaps)")
     ap.add_argument("--max-intensity", type=float, default=1.0, help="bridge-side colour ceiling, 0..1")
     ap.add_argument("--flip-x", action="store_true")
     ap.add_argument("--flip-y", action="store_true")
@@ -531,6 +567,16 @@ def main():
     opts.max_intensity = max(0.0, min(1.0, opts.max_intensity))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s.%(msecs)03d %(message)s",
                         datefmt="%H:%M:%S")
+    if opts.chunk_ms < HELIOS_MIN_CHUNK_MS:
+        log.warning("--chunk-ms %.1f is below the Helios SDK's 10 ms guideline; expect gaps",
+                    opts.chunk_ms)
+    min_capacity = int(2 * opts.max_rate / REFERENCE_FPS)
+    if opts.capacity < min_capacity:
+        log.warning("--capacity %d holds less than two %d fps frames at %d pps (%d points); "
+                    "Laser Out may not be able to send whole frames. Lower Laser Out's "
+                    "sent_ahead_samples to cut latency instead.",
+                    opts.capacity, REFERENCE_FPS, opts.max_rate, min_capacity)
+    restore_timer = setup_fine_sleep()
 
     scan_gate = threading.RLock()
     dacs = []
@@ -554,7 +600,7 @@ def main():
             log.info("no Helios found yet; waiting for one to be plugged in")
 
     threading.Thread(target=beacon_loop, args=(dacs, opts), daemon=True).start()
-    threading.Thread(target=stats_loop, args=(dacs,), daemon=True).start()
+    threading.Thread(target=stats_loop, args=(dacs, opts), daemon=True).start()
 
     try:
         while True:
@@ -580,6 +626,7 @@ def main():
             d.shutdown()
         if hl is not None:
             hl.lib.CloseDevices()
+        restore_timer()
     return 0
 
 
