@@ -1,0 +1,2 @@
+5881d9f8dd092f18be726cdfd687b9908108d62a
+libusb-1.0.dll: sdk/cpp/libusb_bin/Windows/x64/Release/dll at the same commit, sha256 1dac95d1eafcba057cf3df73dcf419bc14f4167ef4ac92fe1f8fdcab4278b6f4
