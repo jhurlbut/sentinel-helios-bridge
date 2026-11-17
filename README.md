@@ -154,9 +154,12 @@ not as a held beam.
 
 ## Status
 
-Tested against the `null` backend and Sentinel's Laser Out. Treat physical
-output as unproven on your rig until you have run the first light checklist.
-Issues and pull requests are welcome.
+Works with a real USB Helios driving a laser from Sentinel's Laser Out, and
+against the `null` backend. In a realtime music/laser/video piece (Sentinel
+controlled by CV from VCV Rack), the red outlines drawn while the creatures
+assemble and disassemble go out through this bridge and a Helios DAC.
+Projectors and scanners differ, so run the first light checklist on your own
+rig before relying on it. Issues and pull requests are welcome.
 
 ## License
 
